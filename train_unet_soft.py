@@ -103,7 +103,7 @@ def parse_args():
     parser.add_argument("--wait_semi",default=600,type=int,
                         help="Number of Epochs to wait before using semi-supervised loss")
 
-    parser.add_argument("--split",default=1,type=float) # 0.8
+    parser.add_argument("--split",default=0.8,type=float) # 0.8
     # args = parser.parse_args()
 
     parser.add_argument("--dtrain_times",default=1,type=int)
@@ -167,9 +167,9 @@ def make_D_label(label, ignore_mask):
 '''
     Snapshot the Best Model
 '''
-def snapshot_segdis(model,discriminator,valoader,epoch,best_miou,snapshot_dir,prefix):
+def snapshot_segdis(model,discriminator,valoader,epoch,best_miou,best_eiou,snapshot_dir,prefix):
     # miou = val(model,valoader)
-    miou = val_sigmoid(model,valoader)
+    miou, eiou = val_e(model,valoader)
     snapshot = {
         'epoch': epoch,
         'state_dict': model.state_dict(),
@@ -182,11 +182,15 @@ def snapshot_segdis(model,discriminator,valoader,epoch,best_miou,snapshot_dir,pr
     }
     if miou > best_miou:
         best_miou = miou
-        torch.save(snapshot,os.path.join(snapshot_dir,'{}.pth.tar'.format(prefix)))
-        torch.save(snapshot_dis,os.path.join(snapshot_dir,'{}_dis.pth.tar'.format(prefix)))
+        torch.save(snapshot,os.path.join(snapshot_dir,'{}_maxmiou.pth.tar'.format(prefix)))
+        torch.save(snapshot_dis,os.path.join(snapshot_dir,'{}_dis_maxmiou.pth.tar'.format(prefix)))
 
-    print("[{}] Curr mIoU: {:0.4f} Best mIoU: {}".format(epoch,miou,best_miou))
-    return best_miou
+    if eiou > best_eiou:
+        best_eiou = eiou
+        torch.save(snapshot,os.path.join(snapshot_dir,'{}_maxeiou.pth.tar'.format(prefix)))
+
+    print("[{}] Curr mIoU: {:0.4f} Curr eIoU: {:0.4f} Best mIoU: {:0.4f} Best eIoU: {:0.4f}".format(epoch,miou,eiou,best_miou,best_eiou))
+    return best_miou, best_eiou
 
 
 def make_D_label(label, ignore_mask):
@@ -254,11 +258,10 @@ def train_base(generator,optimG,trainloader,valoader,args):
 
             itr = len(trainloader)*(epoch-1) + batch_id
             cprob = generator(img)
-            # cprob = nn.LogSoftmax()(cprob)
-            cprob = nn.Sigmoid()(cprob)
+            cprob = nn.LogSoftmax()(cprob)
 
-            # Lseg = nn.NLLLoss2d()(cprob,mask)
-            Lseg = nn.BCELoss()(cprob,mask)
+            Lseg = nn.NLLLoss2d()(cprob,mask)
+            # Lseg = nn.BCELoss()(cprob,mask)
 
             optimG = poly_lr_scheduler(optimG, args.g_lr, itr)
             optimG.zero_grad()
@@ -275,11 +278,11 @@ def train_base(generator,optimG,trainloader,valoader,args):
     Adversarial Training
 '''
 def train_adv(generator,discriminator,optimG,optimD,trainloader,valoader,args,ws):
-
+    best_eiou = -1
     best_miou = -1
     for epoch in range(args.start_epoch,args.max_epoch+1):
         generator.train()
-        for batch_id, (img,mask,ohmask) in enumerate(trainloader):
+        for batch_id, (img,mask,ohmask,_) in enumerate(trainloader):
             if args.nogpu:
                 img,mask,ohmask = Variable(img),Variable(mask),Variable(ohmask)
             else:
@@ -349,7 +352,7 @@ def train_adv(generator,discriminator,optimG,optimD,trainloader,valoader,args,ws
                 .format(epoch,itr,(LDr + LDf).data,LDr.data,LDf.data,LGseg.data,LGce.data,LGadv.data))
                     # .format(epoch,itr,(LDr + LDf).data[0],LDr.data[0],LDf.data[0],LGseg.data[0],LGce.data[0],LGadv.data[0]))
         # best_miou = snapshot(generator,valoader,epoch,best_miou,args.snapshot_dir,args.prefix)
-        best_miou = snapshot_segdis(generator,discriminator,valoader,epoch,best_miou,args.snapshot_dir,args.prefix)
+        best_miou, best_eiou = snapshot_segdis(generator,discriminator,valoader,epoch,best_miou,best_eiou,args.snapshot_dir,args.prefix)
 
 
 def iter_test(trainloader_u):
@@ -371,7 +374,7 @@ def iter_test(trainloader_u):
 def train_semi(generator,discriminator,optimG,optimD,trainloader_l,trainloader_u,valoader,args):
 
     best_miou = -1
-
+    best_eiou = -1
     for epoch in range(args.start_epoch,args.max_epoch+1):
         generator.train()
         trainloader_l_iter = iter(trainloader_l)
@@ -392,11 +395,11 @@ def train_semi(generator,discriminator,optimG,optimD,trainloader_l,trainloader_u
                     loader_u = trainloader_l_iter
                 # Check if the loader has a batch available
                 try:
-                    img_u,mask_u,ohmask_u = next(loader_u)
+                    img_u,mask_u,ohmask_u,_ = next(loader_u)
                 except:
                     trainloader_u_iter = iter(trainloader_u)
                     loader_u = trainloader_u_iter
-                    img_u,mask_u,ohmask_u = next(loader_u)
+                    img_u,mask_u,ohmask_u,_ = next(loader_u)
 
                 if args.nogpu:
                     img_u,mask_u,ohmask_u = Variable(img_u),Variable(mask_u),Variable(ohmask_u)
@@ -446,9 +449,9 @@ def train_semi(generator,discriminator,optimG,optimD,trainloader_l,trainloader_u
             loader_u = trainloader_u_iter
             try:
                 if random.random() <0.5:
-                    img_l,mask_l,ohmask_l = next(loader_l)
+                    img_l,mask_l,ohmask_l,_ = next(loader_l)
                 else:
-                    img_l,mask_l,ohmask_l = next(loader_u)
+                    img_l,mask_l,ohmask_l,_ = next(loader_u)
             except:
                 break
             if args.nogpu:
@@ -527,178 +530,7 @@ def train_semi(generator,discriminator,optimG,optimD,trainloader_l,trainloader_u
                     .format(epoch,itr,LD_d,LDr_d,LDf_d,LGseg_d,LGce_d,LGadv_d,LGsemi_d))
 
         # best_miou = snapshot(generator,valoader,epoch,best_miou,args.snapshot_dir,args.prefix)
-        best_miou = snapshot_segdis(generator,discriminator,valoader,epoch,best_miou,args.snapshot_dir,args.prefix)
-
-'''
-    Semi supervised training
-'''
-def train_semi_sigmoid(generator,discriminator,optimG,optimD,trainloader_l,trainloader_u,valoader,args):
-
-    best_miou = -1
-    print("sigmoid generator!!")
-    for epoch in range(args.start_epoch,args.max_epoch+1):
-        generator.train()
-        trainloader_l_iter = iter(trainloader_l)
-        trainloader_u_iter = iter(trainloader_u)
-        print("Epoch: {}".format(epoch))
-        batch_id = 0
-        while(True):
-            batch_id += 1
-            itr = (len(trainloader_u) + len(trainloader_l))*(epoch-1) + batch_id
-            LGsemi_d = 0
-            LGsemi_c = 0
-            if epoch > args.wait_semi:
-                if random.random() <0.5:
-                    loader_l = trainloader_l_iter
-                    loader_u = trainloader_u_iter
-                else:
-                    loader_l = trainloader_u_iter
-                    loader_u = trainloader_l_iter
-                # Check if the loader has a batch available
-                try:
-                    img_u,mask_u,ohmask_u, _ = next(loader_u)
-                except:
-                    trainloader_u_iter = iter(trainloader_u)
-                    loader_u = trainloader_u_iter
-                    img_u,mask_u,ohmask_u, _ = next(loader_u)
-
-                if args.nogpu:
-                    img_u,mask_u,ohmask_u = Variable(img_u),Variable(mask_u),Variable(ohmask_u)
-                else:
-                    img_u,mask_u,ohmask_u = Variable(img_u.cuda()),Variable(mask_u.cuda()),Variable(ohmask_u.cuda())
-
-                # semi unlabelled training
-                cpmap = generator(img_u)
-                cpmapsmax = nn.Sigmoid()(cmap)
-                # cpmapsmax = nn.Softmax2d()(cpmap)
-                conf = discriminator(cpmapsmax)
-                confsmax = nn.Softmax2d()(conf)
-                conflsmax = nn.LogSoftmax()(conf)
-
-                N = cpmap.size()[0]
-                H = cpmap.size()[2]
-                W = cpmap.size()[3]
-                # Adversarial Loss
-                targetr = Variable(torch.ones((N,H,W)).long())
-                if not args.nogpu:
-                    targetr = targetr.cuda()
-                LGadv = nn.NLLLoss2d()(conflsmax,targetr)
-                LGadv_d = LGadv.data
-
-                hardpred = torch.max(cpmapsmax,1)[1].squeeze(1)
-                idx = np.zeros(cpmap.data.cpu().numpy().shape,dtype=np.uint8)
-                idx = idx.transpose(0, 2, 3, 1)
-                confnp = confsmax[:,1,...].data.cpu().numpy()
-                hardprednp = hardpred.data.cpu().numpy()
-                idx[confnp > args.t_semi] = np.identity(2, dtype=idx.dtype)[hardprednp[ confnp > args.t_semi]]
-                LG = args.lam_adv*LGadv
-                if np.count_nonzero(idx) != 0:
-                    cpmaplsmax = nn.LogSoftmax()(cpmap)
-                    idx = Variable(torch.from_numpy(idx.transpose(0,3,1,2)).byte().cuda())
-                    LGsemi_arr = cpmaplsmax.masked_select(idx.bool())
-                    LGsemi = -1*LGsemi_arr.mean()
-                    LGsemi_d = LGsemi.data
-                    # LGsemi_c = LGsemi.cpu().numpy()
-                    LGsemi = args.lam_semi*LGsemi
-                    # LG += LGsemi
-                LG.backward()
-                optimG = poly_lr_scheduler(optimG, args.g_lr, itr)
-                optimG.step()
-            ################################################
-            #  train labelled data                         #
-            ################################################
-            loader_l = trainloader_l_iter
-            loader_u = trainloader_u_iter
-            try:
-                if random.random() <0.5:
-                    img_l,mask_l,ohmask_l, _  = next(loader_l)
-                else:
-                    img_l,mask_l,ohmask_l, _  = next(loader_u)
-            except:
-                break
-            if args.nogpu:
-                img_l,mask_l,ohmask_l = Variable(img_l),Variable(mask_l),Variable(ohmask_l)
-            else:
-                img_l,mask_l,ohmask_l = Variable(img_l.cuda()),Variable(mask_l.cuda()),Variable(ohmask_l.cuda())
-            ################################################
-            #  Labelled data for Discriminator Training #
-            ################################################
-            cpmap = generator(Variable(img_l.data,volatile=True))
-            # cpmap = nn.Softmax2d()(cpmap)
-            cpmap = nn.Sigmoid()(cpmap) # 4, 1, 320, 320
-
-            N = cpmap.size()[0]
-            H = cpmap.size()[2]
-            W = cpmap.size()[3]
-            # Generate the Real and Fake Labels
-            targetf = Variable(torch.zeros((N,H,W)).long())
-            targetr = Variable(torch.ones((N,H,W)).long())
-            if not args.nogpu:
-                targetf = targetf.cuda()
-                targetr = targetr.cuda()
-
-            # Train on Real
-            # confr = nn.LogSoftmax()(discriminator(ohmask_l.float()))
-            # print(mask_l.size(), ohmask_l.size())
-            tar_mask_l = mask_l.unsqueeze(1)
-            confr = nn.LogSoftmax()(discriminator(tar_mask_l.float()))
-            optimD.zero_grad()
-            if args.d_label_smooth != 0:
-                LDr = (1 - args.d_label_smooth)*nn.NLLLoss2d()(confr,targetr) #  mask_l
-                LDr += args.d_label_smooth * nn.NLLLoss2d()(confr,targetf) # targetf mask_l
-            else:
-                LDr = nn.NLLLoss2d()(confr, targetr) # targetr mask_l
-            LDr.backward()
-
-            # Train on Fake
-            print("cpmap: ", cpmap.size())
-            conff = nn.LogSoftmax()(discriminator(Variable(cpmap.data)))
-            LDf = nn.NLLLoss2d()(conff,mask_l) # targetf
-            LDf.backward()
-            LDr_d = LDr.data
-            # LDr_c = LDr.cpu().numpy()
-            LDf_d = LDf.data
-            # LDf_c = LDf.cpu().numpy()
-            LD_d = LDr_d + LDf_d
-            # LD_c = LDr_c + LDf_c
-            optimD = poly_lr_scheduler(optimD, args.d_lr, itr)
-            optimD.step()
-
-            #####################################
-            #  labelled data Generator Training #
-            #####################################
-            optimG.zero_grad()
-            optimD.zero_grad()
-            cpmap = generator(img_l)
-            cpmapsmax = nn.Sigmoid()(cpmap)
-            print("cpmapsmax: ", cpmapsmax.size())
-            # cpmapsmax = nn.Softmax2d()(cpmap)
-            # cpmaplsmax = nn.LogSoftmax()(cpmap)
-            conff = nn.LogSoftmax()(discriminator(cpmapsmax))
-
-            # LGce = nn.NLLLoss2d()(cpmaplsmax,mask_l)
-            LGCe = CrossEntropy2d()(cpmapsmax, mask_l)
-            LGadv = nn.NLLLoss2d()(conff,targetr) # targetr mask_l
-            LGadv_d = LGadv.data
-            # LGadv_c = LGadv.cpu().numpy()
-            LGce_d = LGce.data
-            # LGce_c = LGce.cpu().numpy()
-
-            # LGsemi_d = 0 # No semi-supervised training
-            LGadv = args.lam_adv*LGadv
-            (LGce + LGadv).backward()
-            optimG = poly_lr_scheduler(optimG, args.g_lr, itr)
-            optimG.step()
-            LGseg_d = LGce_d + LGadv_d + LGsemi_d
-            # LGseg_c = LGce_c + LGadv_c + LGsemi_c
-
-            # training_log = [epoch,itr,LD_c,LDr_c,LDf_c,LGseg_c,LGce_c,LGadv_c,LGsemi_c]
-            print("[{}][{}] LD: {:.4f} LD_fake: {:.4f} LD_real: {:.4f} LG: {:.4f} LG_ce: {:.4f} LG_adv: {:.4f} LG_semi: {:.4f}"\
-                    .format(epoch,itr,LD_d,LDr_d,LDf_d,LGseg_d,LGce_d,LGadv_d,LGsemi_d))
-
-        # best_miou = snapshot(generator,valoader,epoch,best_miou,args.snapshot_dir,args.prefix)
-        best_miou = snapshot_segdis(generator,discriminator,valoader,epoch,best_miou,args.snapshot_dir,args.prefix)
-
+        best_miou, best_eiou = snapshot_segdis(generator,discriminator,valoader,epoch,best_miou,best_eiou,args.snapshot_dir,args.prefix)
 
 def main():
 
@@ -715,10 +547,8 @@ def main():
         imgtr = [ToTensor(),NormalizeOwn()]
 
     # softmax
-    # labtr = [IgnoreLabelClass(),ToTensorLabel()]
-
-    # sigmoid 
-    labtr = [IgnoreLabelClass(),ToTensorLabel(tensor_type=torch.FloatTensor)]
+    labtr = [IgnoreLabelClass(),ToTensorLabel()]
+    # labtr = [IgnoreLabelClass(),ToTensorLabel(tensor_type=torch.FloatTensor)]
     # cotr = [RandomSizedCrop((320,320))] # (321,321)
     cotr = [RandomSizedCrop3((320,320))]
 
@@ -744,22 +574,16 @@ def main():
             imgtr = [ZeroPadding(),ToTensor()]
         else:
             imgtr = [ZeroPadding(),ToTensor(),NormalizeOwn()]
-        # softmax
-        # labtr = [IgnoreLabelClass(),ToTensorLabel()]
-
-        # sigmoid
-        labtr = [IgnoreLabelClass(),ToTensorLabel(tensor_type=torch.FloatTensor)]
+        labtr = [IgnoreLabelClass(),ToTensorLabel()]
+        # labtr = [IgnoreLabelClass(),ToTensorLabel(tensor_type=torch.FloatTensor)]
         cotr = []
     else:
         if args.no_norm:
             imgtr = [ToTensor()]
         else:
             imgtr = [ToTensor(),NormalizeOwn()]
-        # softmax
-        # labtr = [IgnoreLabelClass(),ToTensorLabel()]
-
-        # sigmoid 
-        labtr = [IgnoreLabelClass(),ToTensorLabel(tensor_type=torch.FloatTensor)]
+        labtr = [IgnoreLabelClass(),ToTensorLabel()]
+        # labtr = [IgnoreLabelClass(),ToTensorLabel(tensor_type=torch.FloatTensor)]
         # cotr = [RandomSizedCrop3((320,320))] # (321,321)
         cotr = [RandomSizedCrop3((320,320))]
 
@@ -773,22 +597,15 @@ def main():
     # generator = deeplabv2.ResDeeplab()
 
     # softmax generator: in_chs=3, out_chs=2
-    # generator = unet.AttU_Net()
-
-    # sigmoid generator: in_chs=3, out_chs=1
-    generator = unet.AttU_Net(output_ch=1)
+    generator = unet.AttU_Net()
     # model_summary = generator.cuda()
 
     init_weights(generator,args.init_net)
 
     if args.init_net != 'unet':
-        """
         optimG = optim.SGD(filter(lambda p: p.requires_grad, \
             generator.parameters()),lr=args.g_lr,momentum=0.9,\
             weight_decay=0.0001,nesterov=True)
-        """
-        optimG = optim.Adam(filter(lambda p: p.requires_grad, \
-            generator.parameters()),args.g_lr, [0.5, 0.999])
     else:
         optimG = optim.Adam(filter(lambda p: p.requires_grad, \
             generator.parameters()),args.g_lr, [0.5, 0.999])
@@ -801,10 +618,7 @@ def main():
     ################
     if args.mode != "base":
         # softmax generator
-        # discriminator = Dis(in_channels=2)
-
-        # sigmoid generator
-        discriminator = Dis(in_channels=1)
+        discriminator = Dis(in_channels=2)
         # model_summary = discriminator.cuda()
         # summary(model_summary, (2, 320, 320))
         if args.d_optim == 'adam':
@@ -822,8 +636,7 @@ def main():
     elif args.mode == 'adv':
         train_adv(generator,discriminator,optimG,optimD,trainloader_l,valoader,args)
     elif args.mode == 'semi':
-        # train_semi(generator,discriminator,optimG,optimD,trainloader_l,trainloader_u,valoader,args)
-        train_semi_sigmoid(generator,discriminator,optimG,optimD,trainloader_l,trainloader_u,valoader,args)
+        train_semi(generator,discriminator,optimG,optimD,trainloader_l,trainloader_u,valoader,args)
     else:
         # train_semir(generator,discriminator,optimG,optimD,trainloader_l,valoader,args)
         print("training mode incorrect")

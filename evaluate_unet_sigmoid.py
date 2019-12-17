@@ -14,7 +14,7 @@ import os.path as osp
 import numpy as np
 from utils.metrics import scores
 import torchvision.transforms as transforms
-from utils.transforms import ResizedImage, ResizedImage3, IgnoreLabelClass, ToTensorLabel, NormalizeOwn, ZeroPadding
+from utils.transforms import ResizedImage, IgnoreLabelClass, ToTensorLabel, NormalizeOwn, ZeroPadding, ResizedImage3
 from torchvision.transforms import ToTensor
 import cv2
 from PIL import Image
@@ -27,7 +27,6 @@ class VOCColorize(object):
     def __call__(self, gray_image):
         size = gray_image.shape
         color_image = np.zeros((3, size[0], size[1]), dtype=np.uint8)
-
         for label in range(0, len(self.cmap)):
             mask = (label == gray_image)
             color_image[0][mask] = self.cmap[label][0]
@@ -161,7 +160,7 @@ def evaluate_generator():
 
     # generator = deeplabv2.ResDeeplab()
     # generatro = fcn.FCN8s_soft()
-    generator = unet.AttU_Net()
+    generator = unet.AttU_Net(output_ch=1)
     print(args.snapshot)
     assert(os.path.isfile(args.snapshot))
     snapshot = torch.load(args.snapshot)
@@ -174,7 +173,7 @@ def evaluate_generator():
     print('Generator Loaded')
     n_classes = 2
 
-    gts, preds = [], []
+    gts, preds, gtes = [], [], []
 
     print('Prediction Goint to Start')
     colorize = VOCColorize()
@@ -185,6 +184,7 @@ def evaluate_generator():
     for img_id, (img, gt_mask, _, gte_mask, name) in enumerate(testloader):
         print("Generating Predictions for Image {}".format(img_id))
         gt_mask = gt_mask.numpy()[0]
+        gte_mask = gte_mask.numpy()[0]
         img = Variable(img.cuda())
         # img.cpu().numpy()[0]
         img_path = osp.join(IMG_DIR, name[0]+'.jpg')
@@ -197,22 +197,27 @@ def evaluate_generator():
         # Get hard prediction
         soft_pred = out_pred_map.data.cpu().numpy()[0]
         soft_pred = soft_pred[:,:gt_mask.shape[0],:gt_mask.shape[1]]
-        hard_pred = np.argmax(soft_pred,axis=0).astype(np.uint8)
+        # hard_pred = np.argmax(soft_pred,axis=0).astype(np.uint8)
+        soft_pred[soft_pred>=0.5] = 1
+        soft_pred[soft_pred<0.5] = 0
+        hard_pred = soft_pred
 
-        print(hard_pred.shape, name)
         output = np.asarray(hard_pred, dtype=np.int)
+        print(output.shape, name)
         filename = os.path.join('results', '{}.png'.format(name[0]))
-        color_file = Image.fromarray(colorize(output).transpose(1, 2, 0), 'RGB')
+        color_file = Image.fromarray(colorize(output[0]).transpose(1, 2, 0), 'RGB')
         color_file.save(filename)
 
-        masked_im = Image.fromarray(vis_seg(img_array, output, palette))
+        masked_im = Image.fromarray(vis_seg(img_array, output[0], palette))
         masked_im.save(filename[0:-4] + '_vis.jpg')
 
-        for gt_, pred_ in zip(gt_mask, hard_pred):
+        for gt_, gte_, pred_ in zip(gt_mask, gte_mask, output):
             gts.append(gt_)
-            preds.append(pred_)
+            preds.append(pred_[0])
+            gtes.append(gte_)
     score, class_iou = scores(gts, preds, n_class=n_classes)
-    print("Mean IoU: {}".format(score))
+    escore, _ = scores(gtes, preds, n_class=n_classes)
+    print("Mean IoU: {}, Mean eIou: {}".format(score, escore))
 
 
 def evaluate_discriminator():
@@ -235,7 +240,7 @@ def evaluate_discriminator():
             img_transform = transforms.Compose([ToTensor(),NormalizeOwn(dataset='corrosion')])
         label_transform = transforms.Compose([IgnoreLabelClass(),ToTensorLabel()])
         # co_transform = transforms.Compose([RandomSizedCrop((320,320))])
-        co_transform = transforms.Compose([ResizedImage3((320,320))])
+        co_transform = transforms.Compose([ResizedImage((320,320))])
 
         testset = Corrosion(home_dir, args.dataset_dir,img_transform=img_transform, \
             label_transform = label_transform,co_transform=co_transform,train_phase=False)

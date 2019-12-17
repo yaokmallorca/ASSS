@@ -322,6 +322,8 @@ class AttU_Net(nn.Module):
         self.Conv_1x1 = nn.Conv2d(64,output_ch,kernel_size=1,stride=1,padding=0)
         self.drop = nn.Dropout2d(p=0.5)
 
+        # self.sigmoid = nn.Sigmoid()
+
     def forward(self,x, dropout=True):
         # encoding path
         x1 = self.Conv1(x)
@@ -361,5 +363,7 @@ class AttU_Net(nn.Module):
 
         d1 = self.Conv_1x1(d2)
         d1 = self.drop(d1)
+
+        # d1 = self.sigmoid(d1)
 
         return d1

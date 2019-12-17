@@ -4,6 +4,10 @@ from PIL import Image
 import torch
 from torch.utils.data import Dataset
 from torchvision.transforms import Compose
+home_dir = os.getcwd()
+print(home_dir)
+os.chdir(home_dir)
+
 from utils.transforms import OneHotEncode
 
 def load_image(file):
@@ -62,15 +66,47 @@ class Corrosion(Dataset):
             # print(f)
             elabel = load_image(f).convert('L')
 
-        image, label = self.co_transform((image, label))
+        # image, label = self.co_transform((image, label))
+        image, label, elabel = self.co_transform((image, label, elabel))
         image = self.img_transform(image)
         label = self.label_transform(label)
+        elabel = self.label_transform(elabel)
         ohlabel = OneHotEncode()(label)
 
         if self.train_phase:
-            return image, label, ohlabel
+            return image, label, ohlabel, elabel
         else:
-            return image, label, ohlabel, filename
+            return image, label, ohlabel, elabel, filename
 
     def __len__(self):
         return len(self.img_list)
+
+
+def test():
+    from utils.transforms import RandomSizedCrop, IgnoreLabelClass, ToTensorLabel, NormalizeOwn,ZeroPadding, OneHotEncode, RandomSizedCrop3
+    from torchvision.transforms import ToTensor,Compose
+    import matplotlib.pyplot as plt
+
+    imgtr = [ToTensor(),NormalizeOwn()]
+    # sigmoid 
+    labtr = [IgnoreLabelClass(),ToTensorLabel(tensor_type=torch.FloatTensor)]
+    # cotr = [RandomSizedCrop((320,320))] # (321,321)
+    cotr = [RandomSizedCrop3((320,320))]
+
+    dataset_dir = '/media/data/seg_dataset'
+    trainset = Corrosion(home_dir, dataset_dir,img_transform=Compose(imgtr), 
+                           label_transform=Compose(labtr),co_transform=Compose(cotr),
+                           split=args.split,labeled=True)
+    trainloader = DataLoader(trainset_l,batch_size=1,shuffle=True,
+                               num_workers=2,drop_last=True)
+
+    for batch_id, (img, mask, _, emask) in enumerate(trainloader):
+        img, mask, emask = img.numpy()[0], mask.numpy()[0], emask.numpy()[0]
+        fig, (ax1, ax2, ax3) = plt.subplots(1, 3)
+        ax1.imshow(img)
+        ax2.imshow(mask)
+        ax3.imshow(emask)
+        plt.show()
+
+if __name__ == '__main__':
+    test()
