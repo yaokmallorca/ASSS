@@ -1,4 +1,5 @@
 import numpy as np
+from inspect import currentframe, getframeinfo
 
 def make_palette(num_classes):
     """
@@ -75,3 +76,8 @@ def vis_seg(img, seg, palette, alpha=0.5):
     vis[mask] += alpha * palette[seg[mask].flat]
     vis = vis.astype(np.uint8)
     return vis
+
+class file_info(object):
+    def __repr__(self):
+        frameinfo = getframeinfo(currentframe())
+        return "[%s]:[%s]" % (frameinfo.filename, frameinfo.lineno)

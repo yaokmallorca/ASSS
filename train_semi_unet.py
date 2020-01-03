@@ -264,8 +264,8 @@ def train_base(generator,optimG,trainloader,valoader,args):
             itr = len(trainloader)*(epoch-1) + batch_id
             cprob = generator(img)
             cprob = nn.LogSoftmax()(cprob)
-            Lseg = loss_calc(cprob, mask)
-            # Lseg = nn.NLLLoss2d()(cprob,mask)
+            # Lseg = loss_calc(cprob, mask)
+            Lseg = nn.NLLLoss2d()(cprob,mask)
             # Lseg = nn.BCELoss()(cprob,mask)
 
             optimG = poly_lr_scheduler(optimG, args.g_lr, itr)
@@ -380,7 +380,7 @@ def iter_test(trainloader_u):
 '''
     Semi supervised training
 '''
-def train_semi(generator,discriminator,optimG,optimD,trainloader_l,trainloader_u,valoader,args):
+def train_semi_b(generator,discriminator,optimG,optimD,trainloader_l,trainloader_u,valoader,args):
 
     best_miou = -1
     best_eiou = -1
@@ -483,8 +483,11 @@ def train_semi(generator,discriminator,optimG,optimD,trainloader_l,trainloader_u
             cpmapsmax = nn.Softmax2d()(cpmap)
             cpmaplsmax = nn.LogSoftmax()(cpmap)
             conff = nn.Sigmoid()(discriminator(cpmapsmax))
-            # LGce = nn.NLLLoss()(cpmaplsmax,mask_l)
-            LGce = loss_calc(cpmaplsmax, mask_l)
+            print("cpmaplsmax: ", cpmaplsmax.size())
+            print("mask_l: ", mask_l.size())
+            print("conff: ", conff.size())
+            # LGce = loss_calc(cpmaplsmax, mask_l)
+            LGce = nn.NLLLoss()(cpmaplsmax,mask_l)
 
             # LGadv = nn.BCELoss()(conff,mask_l)
             LGadv = loss_calc(cpmaplsmax, mask_l)
@@ -509,6 +512,100 @@ def train_semi(generator,discriminator,optimG,optimD,trainloader_l,trainloader_u
 
         # best_miou = snapshot(generator,valoader,epoch,best_miou,args.snapshot_dir,args.prefix)
         best_miou, best_eiou = snapshot_segdis(generator,discriminator,valoader,epoch,best_miou,best_eiou,args.snapshot_dir,args.prefix)
+
+
+def train_semi(generator,discriminator,optimG,optimD,trainloader_l,trainloader_u,valoader,args):
+
+    best_miou = -1
+    best_eiou = -1
+    FILE_INFO = file_info()
+    for epoch in range(args.start_epoch,args.max_epoch+1):
+        generator.train()
+
+        trainloader_l_iter = iter(trainloader_l)
+        trainloader_u_iter = iter(trainloader_u)
+        print("Epoch: {}".format(epoch))
+        batch_id = 0
+        while(True):
+            batch_id += 1
+            itr = (len(trainloader_u) + len(trainloader_l))*(epoch-1) + batch_id
+            optimG.zero_grad()
+            optimD.zero_grad()
+            optimD = poly_lr_scheduler(optimD, args.d_lr, itr)
+            optimG = poly_lr_scheduler(optimG, args.g_lr, itr)
+
+            loader_l = trainloader_l_iter
+            try:
+                img_l,mask_l,ohmask_l,_ = next(loader_l)
+            except:
+                break
+
+            if args.nogpu:
+                img_l,mask_l,ohmask_l = Variable(img_l),Variable(mask_l),Variable(ohmask_l)
+            else:
+                img_l,mask_l,ohmask_l = Variable(img_l.cuda()),Variable(mask_l.cuda()),Variable(ohmask_l.cuda())
+
+            LGsemi_d = 0
+            loss_semi_value = 0
+            if epoch > args.wait_semi:
+                # Check if the loader has a batch available
+
+                # semi unlabelled training
+                cpmap = generator(img_l)
+                cpmapsmax = nn.Softmax2d()(cpmap)
+                cpmaplsmax = nn.LogSoftmax()(cpmap)
+                # confsmax = nn.Softmax2d()(conf)
+                conf = discriminator(cpmapsmax)
+                conf_softmax = nn.Softmax2d()(conf)
+                conf_softmax_remain = conf_softmax.detach().squeeze(1)
+                conf_soft = conf_softmax_remain.data.cpu().numpy()
+
+                semi_gt = np.argmax(conf_soft,axis=1).astype(np.uint8)
+                semi_ratio = 1.0 - float(semi_gt.sum())/semi_gt.size
+                # print('semi ratio: {:.4f}'.format(semi_ratio))
+                if semi_ratio == 0.0:
+                    loss_semi_value += 0
+                else:
+                    semi_gt = torch.LongTensor(semi_gt).cuda()
+                    LGsemi = args.lam_semi * nn.NLLLoss()(cpmaplsmax, semi_gt)
+                    LGsemi_d += LGsemi.data.cpu().numpy()/args.lam_semi
+                    # LGsemi += LGadv_d
+                    LGsemi.backward()
+
+            ################################################
+            #  train labelled data                         #
+            ################################################
+            cpmap = generator(img_l)
+            cpmapsmax = nn.Softmax2d()(cpmap)
+            cpmaplsmax = nn.LogSoftmax()(cpmap)
+            conff = nn.LogSoftmax()(discriminator(cpmapsmax))
+            LGce = nn.NLLLoss()(cpmaplsmax,mask_l)
+            # LGce = loss_calc(cpmaplsmax, mask_l)
+
+            # LGadv = nn.BCELoss()(conff,mask_l)
+            # LGadv = loss_calc(conff, mask_l)
+            LGadv = nn.NLLLoss()(conff,mask_l)
+            LGadv_d = LGadv.data
+            LGce_d = LGce.data
+            # print("{}: {}".format(str(FILE_INFO), conff.size()))
+
+            # LGsemi_d = 0 # No semi-supervised training
+            LGadv = args.lam_adv*LGadv
+            (LGce + LGadv).backward()
+            # optimG = poly_lr_scheduler(optimG, args.g_lr, itr)
+            optimG.step()
+            optimD.step()
+
+            LGseg_d = LGce_d + LGadv_d + LGsemi_d
+            # LGseg_c = LGce_c + LGadv_c + LGsemi_c
+
+            # training_log = [epoch,itr,LD_c,LDr_c,LDf_c,LGseg_c,LGce_c,LGadv_c,LGsemi_c]
+            print("[{}][{}] LGseg_d: {:.4f} LG_ce: {:.4f} LG_adv: {:.4f} LG_semi: {:.4f}"\
+                    .format(epoch,itr,LGseg_d,LGce_d,LGadv_d,LGsemi_d))
+
+        # best_miou = snapshot(generator,valoader,epoch,best_miou,args.snapshot_dir,args.prefix)
+        best_miou, best_eiou = snapshot_segdis(generator,discriminator,valoader,epoch,best_miou,best_eiou,args.snapshot_dir,args.prefix)
+
 
 def main():
     args = parse_args()

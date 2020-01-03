@@ -55,7 +55,7 @@ def parse_args():
     parser.add_argument("--lam_semi",default=0.1,
                         help="Weight for Semi-supervised loss")
 
-    parser.add_argument("--t_semi",default=0.1,type=float,
+    parser.add_argument("--t_semi",default=0.2,type=float,
                         help="Threshold for self-taught learning")
 
     parser.add_argument("--nogpu",action='store_true',

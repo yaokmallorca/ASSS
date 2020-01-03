@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import init
 
+
 def init_weights(net, init_type='normal', gain=0.02):
     def init_func(m):
         classname = m.__class__.__name__
@@ -295,7 +296,7 @@ class AttU_Net(nn.Module):
     def __init__(self,img_ch=3,output_ch=2):
         super(AttU_Net,self).__init__()
         
-        self.Maxpool = nn.MaxPool2d(kernel_size=2,stride=2)
+        self.Maxpool = nn.MaxPool2d(kernel_size=2,stride=2) 
 
         self.Conv1 = conv_block(ch_in=img_ch,ch_out=64)
         self.Conv2 = conv_block(ch_in=64,ch_out=128)

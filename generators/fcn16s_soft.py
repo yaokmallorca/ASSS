@@ -1,13 +1,29 @@
 import os.path as osp
 
-import fcn
+# import fcn
+import torch
 import torch.nn as nn
+import numpy as np
 
-from .fcn32s import get_upsampling_weight
+# from .fcn32s import get_upsampling_weight
+def get_upsampling_weight(in_channels, out_channels, kernel_size):
+    """Make a 2D bilinear kernel suitable for upsampling"""
+    factor = (kernel_size + 1) // 2
+    if kernel_size % 2 == 1:
+        center = factor - 1
+    else:
+        center = factor - 0.5
+    og = np.ogrid[:kernel_size, :kernel_size]
+    filt = (1 - abs(og[0] - center) / factor) * \
+           (1 - abs(og[1] - center) / factor)
+    weight = np.zeros((in_channels, out_channels, kernel_size, kernel_size),
+                      dtype=np.float64)
+    weight[range(in_channels), range(out_channels), :, :] = filt
+    return torch.from_numpy(weight).float()
 
 
 class FCN16s(nn.Module):
-
+    """
     pretrained_model = \
         osp.expanduser('~/data/models/pytorch/fcn16s_from_caffe.pth')
 
@@ -18,8 +34,9 @@ class FCN16s(nn.Module):
             path=cls.pretrained_model,
             md5='991ea45d30d632a01e5ec48002cac617',
         )
+    """
 
-    def __init__(self, n_class=21):
+    def __init__(self, n_class=2):
         super(FCN16s, self).__init__()
         # conv1
         self.conv1_1 = nn.Conv2d(3, 64, 3, padding=100)
@@ -72,12 +89,12 @@ class FCN16s(nn.Module):
         self.relu7 = nn.ReLU(inplace=True)
         self.drop7 = nn.Dropout2d()
 
-        self.score_fr = nn.Conv2d(4096, n_class, 1)
-        self.score_pool4 = nn.Conv2d(512, n_class, 1)
+        self.score_fr_cor = nn.Conv2d(4096, n_class, 1)
+        self.score_pool4_cor = nn.Conv2d(512, n_class, 1)
 
-        self.upscore2 = nn.ConvTranspose2d(
+        self.upscore2_cor = nn.ConvTranspose2d(
             n_class, n_class, 4, stride=2, bias=False)
-        self.upscore16 = nn.ConvTranspose2d(
+        self.upscore16_cor = nn.ConvTranspose2d(
             n_class, n_class, 32, stride=16, bias=False)
 
         self._initialize_weights()
@@ -126,17 +143,17 @@ class FCN16s(nn.Module):
         h = self.relu7(self.fc7(h))
         h = self.drop7(h)
 
-        h = self.score_fr(h)
-        h = self.upscore2(h)
-        upscore2 = h  # 1/16
+        h = self.score_fr_cor(h)
+        h = self.upscore2_cor(h)
+        upscore2_cor = h  # 1/16
 
-        h = self.score_pool4(pool4)
-        h = h[:, :, 5:5 + upscore2.size()[2], 5:5 + upscore2.size()[3]]
-        score_pool4c = h  # 1/16
+        h = self.score_pool4_cor(pool4)
+        h = h[:, :, 5:5 + upscore2_cor.size()[2], 5:5 + upscore2_cor.size()[3]]
+        score_pool4c_cor = h  # 1/16
 
-        h = upscore2 + score_pool4c
+        h = upscore2_cor + score_pool4c_cor
 
-        h = self.upscore16(h)
+        h = self.upscore16_cor(h)
         h = h[:, :, 27:27 + x.size()[2], 27:27 + x.size()[3]].contiguous()
 
         return h

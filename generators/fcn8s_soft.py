@@ -1,16 +1,32 @@
 import os.path as osp
 
-import fcn
+# import fcn
+import torch
 import torch.nn as nn
+import numpy as np
 
-from .fcn32s_soft import get_upsampling_weight
+# from .fcn32s_soft import get_upsampling_weight
 
+def get_upsampling_weight(in_channels, out_channels, kernel_size):
+    """Make a 2D bilinear kernel suitable for upsampling"""
+    factor = (kernel_size + 1) // 2
+    if kernel_size % 2 == 1:
+        center = factor - 1
+    else:
+        center = factor - 0.5
+    og = np.ogrid[:kernel_size, :kernel_size]
+    filt = (1 - abs(og[0] - center) / factor) * \
+           (1 - abs(og[1] - center) / factor)
+    weight = np.zeros((in_channels, out_channels, kernel_size, kernel_size),
+                      dtype=np.float64)
+    weight[range(in_channels), range(out_channels), :, :] = filt
+    return torch.from_numpy(weight).float()
 
 class FCN8s_soft(nn.Module):
 
     pretrained_model = \
         osp.expanduser('~/data/models/pytorch/fcn8s_from_caffe.pth')
-
+    """
     @classmethod
     def download(cls):
         return fcn.data.cached_download(
@@ -18,6 +34,7 @@ class FCN8s_soft(nn.Module):
             path=cls.pretrained_model,
             md5='dbd9bbb3829a3184913bccc74373afbb',
         )
+    """
 
     def __init__(self, n_class=2, bayes=False):
         super(FCN8s_soft, self).__init__()
@@ -170,7 +187,7 @@ class FCN8s_soft(nn.Module):
 
 
 class FCN8s_softAtOnce(FCN8s_soft):
-
+    """
     pretrained_model = \
         osp.expanduser('~/data/models/pytorch/fcn8s-atonce_from_caffe.pth')
 
@@ -181,7 +198,7 @@ class FCN8s_softAtOnce(FCN8s_soft):
             path=cls.pretrained_model,
             md5='bfed4437e941fef58932891217fe6464',
         )
-
+    """
     def forward(self, x):
         h = x
         h = self.relu1_1(self.conv1_1(h))
