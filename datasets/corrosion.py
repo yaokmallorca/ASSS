@@ -27,8 +27,8 @@ class Corrosion(Dataset):
 
     def __init__(self, root, data_root, img_transform = Compose([]),\
      label_transform=Compose([]), co_transform=Compose([]),\
-      train_phase=True,split=1,labeled=True,seed=0):
-        np.random.seed(100)
+      train_phase=True,split=1,labeled=True,seed=0,label_correction=False):
+        np.random.seed(666)
         self.n_class = 2
         self.root = root
         self.data_root = data_root
@@ -52,6 +52,7 @@ class Corrosion(Dataset):
         self.label_transform = label_transform
         self.co_transform = co_transform
         self.train_phase = train_phase
+        self.label_correction = label_correction
 
     def __getitem__(self, index):
         filename = self.img_list[index]
@@ -67,6 +68,7 @@ class Corrosion(Dataset):
             elabel = load_image(f).convert('L')
 
         # image, label = self.co_transform((image, label))
+        image_org = np.array(image.copy())
         image, label, elabel = self.co_transform((image, label, elabel))
         image = self.img_transform(image)
         label = self.label_transform(label)
@@ -74,7 +76,11 @@ class Corrosion(Dataset):
         ohlabel = OneHotEncode()(label)
 
         if self.train_phase:
-            return image, label, ohlabel, elabel
+            if self.label_correction:
+                # print(image.shape, label.shape, ohlabel.shape, image_org.shape)
+                return image, label, ohlabel, elabel, image_org
+            else:
+                return image, label, ohlabel, elabel
         else:
             return image, label, ohlabel, elabel, filename
 

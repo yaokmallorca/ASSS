@@ -21,7 +21,6 @@ class DenseCRF(object):
         self.bi_rgb_std = bi_rgb_std
 
     def __call__(self, image, probmap):
-        # print(probmap.shape)
         C, H, W = probmap.shape
 
         U = utils.unary_from_softmax(probmap)
